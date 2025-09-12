@@ -59,7 +59,7 @@ def run_batch(
     last_done = 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    png_dir = output_dir / "png"
+    # PNG outputs will be nested under each processed study folder (per-file computed)
 
     # Pre-read original StudyInstanceUIDs for ordering/grouping (best-effort)
     orig_study_uid_by_path: dict[Path, str] = {}
@@ -90,9 +90,13 @@ def run_batch(
         if on_log:
             on_log("info", f"Starting processing with {max_workers} workers")
 
-        def _relative_to_inputs(path: Path) -> Path:
-            # Choose the longest matching input root
-            rel: Path | None = None
+        def _match_root_and_rel(path: Path) -> tuple[Path, Path]:
+            """Return (matched_root, relative_path) where relative_path is path relative to root.
+
+            Falls back to (path.parent, Path(path.name)) if no root matches.
+            """
+            best_root: Path | None = None
+            best_rel: Path | None = None
             best_len = -1
             for root in inputs:
                 try:
@@ -102,8 +106,14 @@ def run_batch(
                 root_len = len(str(root))
                 if root_len > best_len:
                     best_len = root_len
-                    rel = r
-            return rel if rel is not None else Path(path.name)
+                    best_root = root
+                    best_rel = r
+            if best_root is None or best_rel is None:
+                return path.parent, Path(path.name)
+            return best_root, best_rel
+
+        def _processed_base_for(root: Path) -> Path:
+            return output_dir / f"{root.name}_processed"
 
         def process_one(path: Path) -> tuple[Path, Path | None, str, str]:
             if cancelled_flag and cancelled_flag.is_set():
@@ -112,8 +122,9 @@ def run_batch(
             notes = "; ".join(warns)
             if ds is None:
                 return path, None, "unreadable", notes
-            rel = _relative_to_inputs(path)
-            out_path = output_dir / rel
+            root, rel = _match_root_and_rel(path)
+            processed_base = _processed_base_for(root)
+            out_path = processed_base / rel
             if dry_run:
                 # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
                 return path, out_path, "dry-run", notes
@@ -130,10 +141,28 @@ def run_batch(
                         pass
                 write_dicom(ds, out_path)
                 if export_pngs:
-                    png_out = png_dir / rel.with_suffix(".png")
+                    png_out = (processed_base / "png" / rel).with_suffix(".png")
                     ok = export_png(ds, png_out)
-                    if not ok and on_log:
-                        on_log("warn", f"PNG export failed: {path}")
+                    if not ok:
+                        if on_log:
+                            on_log("warn", f"PNG export failed: {path}")
+                    else:
+                        # OCR text from PNG and write sidecar .txt
+                        try:
+                            from PIL import Image
+                            try:
+                                import pytesseract as _pyt
+                            except Exception:
+                                _pyt = None
+                            if _pyt is not None:
+                                img = Image.open(str(png_out))
+                                text = _pyt.image_to_string(img)
+                                txt_path = png_out.with_suffix(".txt")
+                                txt_path.parent.mkdir(parents=True, exist_ok=True)
+                                txt_path.write_text(text or "", encoding="utf-8")
+                        except Exception:
+                            if on_log:
+                                on_log("warn", f"PNG OCR failed: {png_out}")
                 return path, out_path, "ok", notes
             except Exception:
                 return path, out_path, "write-failed", "Failed to write output"
@@ -166,8 +195,9 @@ def run_batch(
                     if cancelled_flag and cancelled_flag.is_set():
                         return pdf_path, None, "cancelled", "Cancelled before start"
                     # Redact top third and extract study text
-                    rel_pdf = _relative_to_inputs(pdf_path)
-                    out_pdf = output_dir / rel_pdf
+                    root_pdf, rel_pdf = _match_root_and_rel(pdf_path)
+                    processed_base_pdf = _processed_base_for(root_pdf)
+                    out_pdf = processed_base_pdf / rel_pdf
                     ok_redact = False
                     try:
                         if not dry_run:
@@ -178,7 +208,7 @@ def run_batch(
                     # Write text file alongside
                     notes = ""
                     if segment:
-                        txt_out = (output_dir / rel_pdf).with_suffix(".txt")
+                        txt_out = (processed_base_pdf / rel_pdf).with_suffix(".txt")
                         if not dry_run:
                             try:
                                 txt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -215,8 +245,8 @@ def run_batch(
                     study_uid = orig_study_uid_by_path.get(p, "")
                     if not study_uid:
                         continue
-                    rel = _relative_to_inputs(p)
-                    outp = output_dir / rel
+                    root_p, rel_p = _match_root_and_rel(p)
+                    outp = _processed_base_for(root_p) / rel_p
                     if outp.exists():
                         study_to_paths.setdefault(study_uid, []).append(outp)
                 # Delete first file per study

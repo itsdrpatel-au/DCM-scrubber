@@ -53,7 +53,7 @@ def detect_pii_boxes(image_array: np.ndarray) -> list[tuple[int, int, int, int]]
         return []
     img = _to_pil_uint8(image_array)
     try:
-        output_type = pytesseract.Output.DICT  # type: ignore[attr-defined]
+        output_type = pytesseract.Output.DICT  # pytesseract provides Output constants
         data = pytesseract.image_to_data(img, output_type=output_type)
     except Exception:
         return []
