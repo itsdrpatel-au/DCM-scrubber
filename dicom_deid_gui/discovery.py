@@ -27,6 +27,9 @@ def iter_dicom_paths(inputs: list[Path], recurse: bool) -> Iterable[Path]:
         if not root.exists():
             continue
         if root.is_file():
+            # Ignore DICOMDIR index files
+            if root.name.upper() == "DICOMDIR":
+                continue
             if root.suffix.lower() == ".dcm" or _looks_like_dicom(root):
                 yield root
             continue
@@ -37,6 +40,9 @@ def iter_dicom_paths(inputs: list[Path], recurse: bool) -> Iterable[Path]:
             walker = root.glob("*")
         for p in walker:
             if not p.is_file():
+                continue
+            # Ignore DICOMDIR index files
+            if p.name.upper() == "DICOMDIR":
                 continue
             if p.suffix.lower() == ".dcm" or _looks_like_dicom(p):
                 yield p

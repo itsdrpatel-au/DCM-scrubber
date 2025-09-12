@@ -11,7 +11,7 @@ import pydicom
 
 from .dicom_core import deidentify_and_mask, export_png, write_dicom
 from .discovery import iter_dicom_paths, iter_pdf_paths
-from .pdf_core import extract_study_text_segment, redact_pdf_top_third
+from .pdf_core import extract_study_text_segment
 from .pii_ocr import detect_pii_boxes, mask_boxes
 from .reporting import ReportWriter, write_study_summary
 
@@ -225,29 +225,22 @@ def run_batch(
                 def process_pdf(pdf_path: Path) -> tuple[Path, Path | None, str, str]:
                     if cancelled_flag and cancelled_flag.is_set():
                         return pdf_path, None, "cancelled", "Cancelled before start"
-                    # Redact top third and extract study text
+                    # Extract study text only (do not write redacted PDF)
                     root_pdf, rel_pdf = _match_root_and_rel(pdf_path)
                     processed_base_pdf = _processed_base_for(root_pdf)
-                    out_pdf = processed_base_pdf / rel_pdf
-                    ok_redact = False
-                    try:
-                        if not dry_run:
-                            ok_redact = redact_pdf_top_third(pdf_path, out_pdf)
-                    except Exception:
-                        ok_redact = False
+                    # Target TXT sidecar path
+                    txt_out = (processed_base_pdf / rel_pdf).with_suffix(".txt")
                     segment = extract_study_text_segment(pdf_path)
                     # Write text file alongside
                     notes = ""
-                    if segment:
-                        txt_out = (processed_base_pdf / rel_pdf).with_suffix(".txt")
-                        if not dry_run:
-                            try:
-                                txt_out.parent.mkdir(parents=True, exist_ok=True)
-                                txt_out.write_text(segment, encoding="utf-8")
-                            except Exception:
-                                notes = "Failed to write extracted text"
-                    status = "ok" if ok_redact or dry_run else "pdf-redact-failed"
-                    return pdf_path, out_pdf, status, notes
+                    if not dry_run:
+                        try:
+                            txt_out.parent.mkdir(parents=True, exist_ok=True)
+                            txt_out.write_text(segment or "", encoding="utf-8")
+                        except Exception:
+                            notes = "Failed to write extracted text"
+                    status = "ok" if not dry_run else "dry-run"
+                    return pdf_path, (txt_out if not dry_run else txt_out), status, notes
 
                 pdf_futures = [ex.submit(process_pdf, p) for p in pdfs]
                 for fut in as_completed(pdf_futures):

@@ -63,8 +63,33 @@ def extract_study_text_segment(in_pdf: Path) -> str:
         if end_idx == -1:
             # until end if marker not found
             end_idx = len(full_text)
-        segment = full_text[start_idx:end_idx].strip()
-        return segment
+        segment = full_text[start_idx:end_idx]
+        # Normalize newlines and remove boilerplate lines
+        lines = [ln.strip() for ln in segment.replace("\r", "").split("\n")]
+        cleaned: list[str] = []
+        for ln in lines:
+            low = ln.lower()
+            # Drop "Page X of Y" lines
+            if low.startswith("page ") and " of " in low:
+                parts = low.split()
+                # quick heuristic: 'page' <num> 'of' <num>
+                try:
+                    if (
+                        len(parts) >= 4
+                        and parts[0] == "page"
+                        and parts[1].isdigit()
+                        and "of" in parts
+                        and any(p.isdigit() for p in parts[parts.index("of") + 1 :])
+                    ):
+                        continue
+                except Exception:
+                    pass
+            # Drop any residual "Electronically signed by" lines
+            if "electronically signed by" in low:
+                continue
+            if ln:
+                cleaned.append(ln)
+        return "\n".join(cleaned).strip()
     except Exception:
         return ""
 
