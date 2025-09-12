@@ -90,6 +90,21 @@ def run_batch(
         if on_log:
             on_log("info", f"Starting processing with {max_workers} workers")
 
+        def _relative_to_inputs(path: Path) -> Path:
+            # Choose the longest matching input root
+            rel: Path | None = None
+            best_len = -1
+            for root in inputs:
+                try:
+                    r = path.resolve().relative_to(root.resolve())
+                except Exception:
+                    continue
+                root_len = len(str(root))
+                if root_len > best_len:
+                    best_len = root_len
+                    rel = r
+            return rel if rel is not None else Path(path.name)
+
         def process_one(path: Path) -> tuple[Path, Path | None, str, str]:
             if cancelled_flag and cancelled_flag.is_set():
                 return path, None, "cancelled", "Cancelled before start"
@@ -97,7 +112,8 @@ def run_batch(
             notes = "; ".join(warns)
             if ds is None:
                 return path, None, "unreadable", notes
-            out_path = output_dir / path.name
+            rel = _relative_to_inputs(path)
+            out_path = output_dir / rel
             if dry_run:
                 # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
                 return path, out_path, "dry-run", notes
@@ -114,7 +130,7 @@ def run_batch(
                         pass
                 write_dicom(ds, out_path)
                 if export_pngs:
-                    png_out = png_dir / (path.stem + ".png")
+                    png_out = png_dir / rel.with_suffix(".png")
                     ok = export_png(ds, png_out)
                     if not ok and on_log:
                         on_log("warn", f"PNG export failed: {path}")
@@ -150,7 +166,8 @@ def run_batch(
                     if cancelled_flag and cancelled_flag.is_set():
                         return pdf_path, None, "cancelled", "Cancelled before start"
                     # Redact top third and extract study text
-                    out_pdf = output_dir / pdf_path.name
+                    rel_pdf = _relative_to_inputs(pdf_path)
+                    out_pdf = output_dir / rel_pdf
                     ok_redact = False
                     try:
                         if not dry_run:
@@ -161,14 +178,15 @@ def run_batch(
                     # Write text file alongside
                     notes = ""
                     if segment:
-                        txt_out = output_dir / (pdf_path.stem + ".txt")
+                        txt_out = (output_dir / rel_pdf).with_suffix(".txt")
                         if not dry_run:
                             try:
+                                txt_out.parent.mkdir(parents=True, exist_ok=True)
                                 txt_out.write_text(segment, encoding="utf-8")
                             except Exception:
                                 notes = "Failed to write extracted text"
                     status = "ok" if ok_redact or dry_run else "pdf-redact-failed"
-                    return pdf_path, (out_pdf if not dry_run else out_pdf), status, notes
+                    return pdf_path, out_pdf, status, notes
 
                 pdf_futures = [ex.submit(process_pdf, p) for p in pdfs]
                 for fut in as_completed(pdf_futures):
@@ -197,7 +215,8 @@ def run_batch(
                     study_uid = orig_study_uid_by_path.get(p, "")
                     if not study_uid:
                         continue
-                    outp = output_dir / p.name
+                    rel = _relative_to_inputs(p)
+                    outp = output_dir / rel
                     if outp.exists():
                         study_to_paths.setdefault(study_uid, []).append(outp)
                 # Delete first file per study
