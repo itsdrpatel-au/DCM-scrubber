@@ -33,6 +33,8 @@ dependencies = [
   "pylibjpeg>=2.0.0",
   "pylibjpeg-libjpeg>=2.0.0",
   "Pillow>=10.0.0",
+  "pypdf>=5.0.0",
+  "reportlab>=4.0.0",
   "rich>=13.7",
   "tqdm>=4.66",
 ]

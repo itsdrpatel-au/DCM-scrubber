@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .dicom_core import deidentify_and_mask, export_png, write_dicom
-from .discovery import iter_dicom_paths
+from .discovery import iter_dicom_paths, iter_pdf_paths
+from .pdf_core import extract_study_text_segment, redact_pdf_top_third
 from .reporting import ReportWriter
 
 
@@ -33,8 +34,10 @@ def run_batch(
     # Start time used for progress estimates
     _start_time = time.time()
 
-    discovered = list(iter_dicom_paths(inputs, recurse=recurse))
-    total = len(discovered)
+    dicoms = list(iter_dicom_paths(inputs, recurse=recurse))
+    pdfs = list(iter_pdf_paths(inputs, recurse=recurse))
+    discovered = dicoms
+    total = len(discovered) + len(pdfs)
     if on_log:
         on_log("info", f"Discovered {total} candidate files")
     if total == 0:
@@ -116,6 +119,51 @@ def run_batch(
                     on_log("info", f"{status}: {inp}")
                 done += 1
                 update_progress()
+
+            # Process PDFs next
+            if not (cancelled_flag and cancelled_flag.is_set()):
+                def process_pdf(pdf_path: Path) -> tuple[Path, Path | None, str, str]:
+                    if cancelled_flag and cancelled_flag.is_set():
+                        return pdf_path, None, "cancelled", "Cancelled before start"
+                    # Redact top third and extract study text
+                    out_pdf = output_dir / pdf_path.name
+                    ok_redact = False
+                    try:
+                        if not dry_run:
+                            ok_redact = redact_pdf_top_third(pdf_path, out_pdf)
+                    except Exception:
+                        ok_redact = False
+                    segment = extract_study_text_segment(pdf_path)
+                    # Write text file alongside
+                    notes = ""
+                    if segment:
+                        txt_out = output_dir / (pdf_path.stem + ".txt")
+                        if not dry_run:
+                            try:
+                                txt_out.write_text(segment, encoding="utf-8")
+                            except Exception:
+                                notes = "Failed to write extracted text"
+                    status = "ok" if ok_redact or dry_run else "pdf-redact-failed"
+                    return pdf_path, (out_pdf if not dry_run else out_pdf), status, notes
+
+                pdf_futures = [ex.submit(process_pdf, p) for p in pdfs]
+                for fut in as_completed(pdf_futures):
+                    if cancelled_flag and cancelled_flag.is_set():
+                        if on_log:
+                            on_log("warn", "Cancellation requested; stopping PDF tasks")
+                        break
+                    try:
+                        inp, outp, status, notes = fut.result()
+                    except Exception:
+                        inp = Path("")
+                        outp = None
+                        status = "error"
+                        notes = "Unhandled exception"
+                    report.write_row(inp, outp, status, notes)
+                    if on_log:
+                        on_log("info", f"{status}: {inp}")
+                    done += 1
+                    update_progress()
 
             # If cancelled, mark remaining as cancelled
             if cancelled_flag and cancelled_flag.is_set():

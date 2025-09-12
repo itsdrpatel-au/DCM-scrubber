@@ -40,3 +40,19 @@ def iter_dicom_paths(inputs: list[Path], recurse: bool) -> Iterable[Path]:
                 continue
             if p.suffix.lower() == ".dcm" or _looks_like_dicom(p):
                 yield p
+
+
+def iter_pdf_paths(inputs: list[Path], recurse: bool) -> Iterable[Path]:
+    """
+    Yield PDF files in study folders.
+    """
+    for root in inputs:
+        if not root.exists():
+            continue
+        if root.is_file() and root.suffix.lower() == ".pdf":
+            yield root
+            continue
+        walker = root.rglob("*.pdf") if recurse else root.glob("*.pdf")
+        for p in walker:
+            if p.is_file():
+                yield p
