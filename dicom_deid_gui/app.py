@@ -56,6 +56,12 @@ class OptionsPanel(QtWidgets.QWidget):
         self.export_png = QtWidgets.QCheckBox()
         self.export_png.setChecked(True)
 
+        self.pii_ocr = QtWidgets.QCheckBox()
+        self.pii_ocr.setChecked(True)
+
+        self.skip_first = QtWidgets.QCheckBox()
+        self.skip_first.setChecked(False)
+
         self.output = QtWidgets.QLineEdit()
         self.output.setReadOnly(True)
         self.pick_output_btn = QtWidgets.QPushButton("Choose…")
@@ -65,6 +71,8 @@ class OptionsPanel(QtWidgets.QWidget):
         layout.addRow("Concurrency (workers)", self.workers)
         layout.addRow("Dry run (don’t write files)", self.dry_run)
         layout.addRow("Export PNG previews", self.export_png)
+        layout.addRow("OCR-based PII mask (no LLM)", self.pii_ocr)
+        layout.addRow("Delete first image per study", self.skip_first)
         out_row = QtWidgets.QHBoxLayout()
         out_row.addWidget(self.output)
         out_row.addWidget(self.pick_output_btn)
@@ -203,6 +211,8 @@ class MainWindow(QtWidgets.QMainWindow):
         workers: int | None = workers_val if workers_val > 0 else None
         dry_run = bool(self.options.dry_run.isChecked())
         export_pngs = bool(self.options.export_png.isChecked())
+        pii_ocr = bool(self.options.pii_ocr.isChecked())
+        skip_first = bool(self.options.skip_first.isChecked())
 
         self.cancel_event = threading.Event()
         self.progress.setValue(0)
@@ -220,6 +230,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 on_log=self.signals.log.emit,
                 cancelled_flag=self.cancel_event,
                 export_pngs=export_pngs,
+                pii_ocr=pii_ocr,
+                skip_first_of_study=skip_first,
             )
             # Notify GUI thread on completion
             self.signals.finished.emit(report)

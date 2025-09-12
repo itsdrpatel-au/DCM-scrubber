@@ -40,6 +40,8 @@ pytest -q
 - **Dry‑run mode**: Processes and reports without writing outputs.
 - **Robust logging**: Rotating file logs plus GUI log pane; logs paths/status only (no PHI).
 - **Thread‑safe GUI**: Progress/log updates via Qt signals; cancel button halts promptly.
+- **OCR PII scan (no LLM)**: Optional OCR‑based scan that masks detected PII text regions (phones, emails, SSN‑like, MRN hints, dates, name hints) before writing.
+- **Skip first image per study**: Optional delete of the very first output image per study (post‑processing), as requested for workflow policies.
 
 ### GUI Overview
 
@@ -59,7 +61,9 @@ dicom-deid \
   --recurse \
   --workers 8 \
   --dry-run \
-  --export-png
+  --export-png \
+  --pii-ocr \
+  --skip-first-of-study
 ```
 
 ### Processing Details

@@ -7,9 +7,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import pydicom
+
 from .dicom_core import deidentify_and_mask, export_png, write_dicom
 from .discovery import iter_dicom_paths, iter_pdf_paths
 from .pdf_core import extract_study_text_segment, redact_pdf_top_third
+from .pii_ocr import detect_pii_boxes, mask_boxes
 from .reporting import ReportWriter
 
 
@@ -24,6 +27,8 @@ def run_batch(
     on_log: Callable[[str, str], None] | None = None,
     cancelled_flag: threading.Event | None = None,
     export_pngs: bool = False,
+    pii_ocr: bool = False,
+    skip_first_of_study: bool = False,
 ) -> Path:
     """
     Discovers files, processes with ThreadPoolExecutor, writes outputs,
@@ -55,6 +60,15 @@ def run_batch(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     png_dir = output_dir / "png"
+
+    # Pre-read original StudyInstanceUIDs for ordering/grouping (best-effort)
+    orig_study_uid_by_path: dict[Path, str] = {}
+    for p in discovered:
+        try:
+            ds_tmp = pydicom.dcmread(str(p), force=True, stop_before_pixels=True)
+            orig_study_uid_by_path[p] = str(getattr(ds_tmp, "StudyInstanceUID", ""))
+        except Exception:
+            orig_study_uid_by_path[p] = ""
 
     with ReportWriter(output_dir) as report:
         report_path = report.path
@@ -88,6 +102,16 @@ def run_batch(
                 # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
                 return path, out_path, "dry-run", notes
             try:
+                # Optional OCR-based PII scan and mask
+                if pii_ocr:
+                    try:
+                        arr = ds.pixel_array  # numpy array
+                        boxes = detect_pii_boxes(arr)
+                        if boxes:
+                            masked_arr = mask_boxes(arr, boxes)
+                            ds.PixelData = masked_arr.tobytes()
+                    except Exception:
+                        pass
                 write_dicom(ds, out_path)
                 if export_pngs:
                     png_out = png_dir / (path.stem + ".png")
@@ -164,6 +188,34 @@ def run_batch(
                         on_log("info", f"{status}: {inp}")
                     done += 1
                     update_progress()
+
+            # After processing DICOMs (and PDFs), optionally delete first image per study
+            if skip_first_of_study and not dry_run:
+                # Build success lists per study in discovered order
+                study_to_paths: dict[str, list[Path]] = {}
+                for p in discovered:
+                    study_uid = orig_study_uid_by_path.get(p, "")
+                    if not study_uid:
+                        continue
+                    outp = output_dir / p.name
+                    if outp.exists():
+                        study_to_paths.setdefault(study_uid, []).append(outp)
+                # Delete first file per study
+                for study_uid, out_list in study_to_paths.items():
+                    if not out_list:
+                        continue
+                    try:
+                        try:
+                            out_list[0].unlink(missing_ok=True)
+                        except TypeError:
+                            # For Python versions without missing_ok, fallback
+                            if out_list[0].exists():
+                                out_list[0].unlink()
+                        if on_log:
+                            on_log("info", f"Deleted first image for study {study_uid}")
+                    except Exception:
+                        if on_log:
+                            on_log("warn", f"Failed deleting first image for study {study_uid}")
 
             # If cancelled, mark remaining as cancelled
             if cancelled_flag and cancelled_flag.is_set():

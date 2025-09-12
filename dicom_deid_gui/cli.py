@@ -25,6 +25,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Also export PNG previews alongside outputs (in output/png)",
     )
+    parser.add_argument(
+        "--pii-ocr",
+        action="store_true",
+        help="Run OCR-based PII scan and mask detected text regions (no LLM).",
+    )
+    parser.add_argument(
+        "--skip-first-of-study",
+        action="store_true",
+        help="Delete the first image per study after processing.",
+    )
     return parser.parse_args(argv)
 
 
@@ -64,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
             on_progress=on_progress,
             on_log=on_log,
             export_pngs=args.export_png,
+            pii_ocr=args.pii_ocr,
+            skip_first_of_study=args.skip_first_of_study,
         )
 
     console.print(f"Report: {report_path}")
