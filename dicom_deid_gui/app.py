@@ -44,7 +44,7 @@ class OptionsPanel(QtWidgets.QWidget):
 
         self.rows = QtWidgets.QSpinBox()
         self.rows.setRange(0, 5000)
-        self.rows.setValue(200)
+        self.rows.setValue(75)
 
         self.workers = QtWidgets.QSpinBox()
         self.workers.setRange(0, 256)

@@ -54,3 +54,22 @@ class ReportWriter:
         out_str = str(output_path) if output_path is not None else ""
         # Ensure no PHI is included (only paths and generic notes)
         self.writer.writerow([str(input_path), out_str, status, notes])
+
+
+def write_study_summary(out_dir: Path, rows: list[tuple[str, bool, str]]) -> Path:
+    """Write a per-study summary CSV with columns: study,pii_detected,pii_images.
+
+    - study: study folder name or identifier
+    - pii_detected: YES/NO
+    - pii_images: semicolon-separated list of relative image paths with detected PII
+    Returns the path to the created CSV.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = out_dir / f"report_summary_{ts}.csv"
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["study", "pii_detected", "pii_images"])  # header
+        for study, detected, images in rows:
+            w.writerow([study, "YES" if detected else "NO", images])
+    return path

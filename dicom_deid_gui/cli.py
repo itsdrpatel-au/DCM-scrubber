@@ -16,7 +16,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--input", "-i", action="append", required=True, help="Input folder(s)")
     parser.add_argument("--output", "-o", required=True, help="Output folder")
-    parser.add_argument("--rows", type=int, default=200, help="Rows to mask (top)")
+    parser.add_argument("--rows", type=int, default=75, help="Rows to mask (top)")
     parser.add_argument("--recurse", action="store_true", help="Recurse into subfolders")
     parser.add_argument("--workers", type=int, default=0, help="Concurrency (0=CPU count)")
     parser.add_argument("--dry-run", action="store_true", help="Dry run (no writes)")

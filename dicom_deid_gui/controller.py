@@ -13,7 +13,7 @@ from .dicom_core import deidentify_and_mask, export_png, write_dicom
 from .discovery import iter_dicom_paths, iter_pdf_paths
 from .pdf_core import extract_study_text_segment, redact_pdf_top_third
 from .pii_ocr import detect_pii_boxes, mask_boxes
-from .reporting import ReportWriter
+from .reporting import ReportWriter, write_study_summary
 
 
 def run_batch(
@@ -72,6 +72,8 @@ def run_batch(
 
     with ReportWriter(output_dir) as report:
         report_path = report.path
+        # Accumulate per-study PII detection info
+        study_pii: dict[str, set[Path]] = {}
 
         def update_progress() -> None:
             nonlocal last_time, last_done
@@ -114,6 +116,17 @@ def run_batch(
 
         def _processed_base_for(root: Path) -> Path:
             return output_dir / f"{root.name}_processed"
+
+        # Determine first image per study to skip entirely (e.g., I000001)
+        skip_first: set[Path] = set()
+        if skip_first_of_study:
+            for p in discovered:
+                root0, rel0 = _match_root_and_rel(p)
+                if rel0.stem == "I000001":
+                    skip_first.add(p)
+        # Filter processing list and recompute total
+        proc_dicoms = [p for p in discovered if p not in skip_first]
+        total = len(proc_dicoms) + len(pdfs)
 
         def process_one(path: Path) -> tuple[Path, Path | None, str, str]:
             if cancelled_flag and cancelled_flag.is_set():
@@ -160,6 +173,20 @@ def run_batch(
                                 txt_path = png_out.with_suffix(".txt")
                                 txt_path.parent.mkdir(parents=True, exist_ok=True)
                                 txt_path.write_text(text or "", encoding="utf-8")
+                                # Track PII-like hints if detected via boxes
+                                if pii_ocr:
+                                    # If boxes were found earlier, mark this image
+                                    try:
+                                        arr = ds.pixel_array
+                                        boxes = detect_pii_boxes(arr)
+                                        if boxes:
+                                            study_id = (
+                                                orig_study_uid_by_path.get(path, "")
+                                                or processed_base.name
+                                            )
+                                            study_pii.setdefault(study_id, set()).add(rel)
+                                    except Exception:
+                                        pass
                         except Exception:
                             if on_log:
                                 on_log("warn", f"PNG OCR failed: {png_out}")
@@ -168,7 +195,11 @@ def run_batch(
                 return path, out_path, "write-failed", "Failed to write output"
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(process_one, p) for p in discovered]
+            # Submit only non-skipped DICOMs
+            futures = [ex.submit(process_one, p) for p in proc_dicoms]
+            # Optionally record skipped items in report (not counted in progress total)
+            for sp in skip_first:
+                report.write_row(sp, None, "skipped-first", "First image of study; not processed")
             for fut in as_completed(futures):
                 if cancelled_flag and cancelled_flag.is_set():
                     if on_log:
@@ -253,18 +284,43 @@ def run_batch(
                 for study_uid, out_list in study_to_paths.items():
                     if not out_list:
                         continue
+                    # Prefer file named I000001.* if present
+                    candidate: Path = out_list[0]
+                    for fp in out_list:
+                        if fp.stem == "I000001":
+                            candidate = fp
+                            break
                     try:
                         try:
-                            out_list[0].unlink(missing_ok=True)
+                            candidate.unlink(missing_ok=True)
                         except TypeError:
-                            # For Python versions without missing_ok, fallback
-                            if out_list[0].exists():
-                                out_list[0].unlink()
+                            if candidate.exists():
+                                candidate.unlink()
                         if on_log:
                             on_log("info", f"Deleted first image for study {study_uid}")
                     except Exception:
                         if on_log:
                             on_log("warn", f"Failed deleting first image for study {study_uid}")
+
+            # Write study summary CSV (PII detection by study)
+            try:
+                summary_rows: list[tuple[str, bool, str]] = []
+                for study_id, imgs in study_pii.items():
+                    summary_rows.append((study_id, True, ";".join(str(p) for p in sorted(imgs))))
+                # Also include studies with no PII
+                seen_ids = set(study_pii.keys())
+                for p in discovered:
+                    sid = orig_study_uid_by_path.get(p, "")
+                    if not sid:
+                        sid = _processed_base_for(_match_root_and_rel(p)[0]).name
+                    if sid not in seen_ids:
+                        summary_rows.append((sid, False, ""))
+                        seen_ids.add(sid)
+                if summary_rows:
+                    write_study_summary(output_dir, summary_rows)
+            except Exception:
+                if on_log:
+                    on_log("warn", "Failed to write study summary CSV")
 
             # If cancelled, mark remaining as cancelled
             if cancelled_flag and cancelled_flag.is_set():
