@@ -11,8 +11,9 @@ def _make_overlay(width: float, height: float) -> BytesIO:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=(width, height))
     c.setFillColorRGB(1, 1, 1)
-    # Cover top third
-    c.rect(0, height * (2.0 / 3.0), width, height / 3.0, fill=1, stroke=0)
+    # Cover fixed 200-point band at the top (approx. 200 px at 72 DPI)
+    top_h = 200.0 if height >= 200.0 else height
+    c.rect(0, height - top_h, width, top_h, fill=1, stroke=0)
     c.save()
     buf.seek(0)
     return buf
