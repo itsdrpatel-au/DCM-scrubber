@@ -13,7 +13,7 @@ from .dicom_core import deidentify_and_mask, export_png
 from .discovery import iter_dicom_paths, iter_pdf_paths
 from .pdf_core import extract_study_text_segment
 from .pii_ocr import detect_pii_boxes, mask_boxes
-from .reporting import ReportWriter, write_study_summary
+from .reporting import ReportWriter
 
 
 def run_batch(
@@ -294,25 +294,7 @@ def run_batch(
                         if on_log:
                             on_log("warn", f"Failed deleting first image for study {study_uid}")
 
-            # Write study summary CSV (PII detection by study)
-            try:
-                summary_rows: list[tuple[str, bool, str]] = []
-                for study_id, imgs in study_pii.items():
-                    summary_rows.append((study_id, True, ";".join(str(p) for p in sorted(imgs))))
-                # Also include studies with no PII
-                seen_ids = set(study_pii.keys())
-                for p in discovered:
-                    sid = orig_study_uid_by_path.get(p, "")
-                    if not sid:
-                        sid = _processed_base_for(_match_root_and_rel(p)[0]).name
-                    if sid not in seen_ids:
-                        summary_rows.append((sid, False, ""))
-                        seen_ids.add(sid)
-                if summary_rows:
-                    write_study_summary(output_dir, summary_rows)
-            except Exception:
-                if on_log:
-                    on_log("warn", "Failed to write study summary CSV")
+            # Study-level summary CSV disabled per request
 
             # If cancelled, mark remaining as cancelled
             if cancelled_flag and cancelled_flag.is_set():
