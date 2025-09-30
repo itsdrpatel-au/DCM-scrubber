@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pydicom
 
-from .dicom_core import deidentify_and_mask, export_png, write_dicom
+from .dicom_core import deidentify_and_mask, export_png
 from .discovery import iter_dicom_paths, iter_pdf_paths
 from .pdf_core import extract_study_text_segment
 from .pii_ocr import detect_pii_boxes, mask_boxes
@@ -137,7 +137,8 @@ def run_batch(
                 return path, None, "unreadable", notes
             root, rel = _match_root_and_rel(path)
             processed_base = _processed_base_for(root)
-            out_path = processed_base / rel
+            # We no longer write DICOMs to output; only PNGs and TXT
+            out_path = (processed_base / rel).with_suffix(".png")
             if dry_run:
                 # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
                 return path, out_path, "dry-run", notes
@@ -152,45 +153,43 @@ def run_batch(
                             ds.PixelData = masked_arr.tobytes()
                     except Exception:
                         pass
-                write_dicom(ds, out_path)
-                if export_pngs:
-                    png_out = (processed_base / "png" / rel).with_suffix(".png")
-                    ok = export_png(ds, png_out)
-                    if not ok:
-                        if on_log:
-                            on_log("warn", f"PNG export failed: {path}")
-                    else:
-                        # OCR text from PNG and write sidecar .txt
+                # Always export PNG (only output artifact for images)
+                png_out = out_path
+                ok = export_png(ds, png_out)
+                if not ok:
+                    if on_log:
+                        on_log("warn", f"PNG export failed: {path}")
+                else:
+                    # OCR text from PNG and write sidecar .txt
+                    try:
+                        from PIL import Image
                         try:
-                            from PIL import Image
-                            try:
-                                import pytesseract as _pyt
-                            except Exception:
-                                _pyt = None
-                            if _pyt is not None:
-                                img = Image.open(str(png_out))
-                                text = _pyt.image_to_string(img)
-                                txt_path = png_out.with_suffix(".txt")
-                                txt_path.parent.mkdir(parents=True, exist_ok=True)
-                                txt_path.write_text(text or "", encoding="utf-8")
-                                # Track PII-like hints if detected via boxes
-                                if pii_ocr:
-                                    # If boxes were found earlier, mark this image
-                                    try:
-                                        arr = ds.pixel_array
-                                        boxes = detect_pii_boxes(arr)
-                                        if boxes:
-                                            study_id = (
-                                                orig_study_uid_by_path.get(path, "")
-                                                or processed_base.name
-                                            )
-                                            study_pii.setdefault(study_id, set()).add(rel)
-                                    except Exception:
-                                        pass
+                            import pytesseract as _pyt
                         except Exception:
-                            if on_log:
-                                on_log("warn", f"PNG OCR failed: {png_out}")
-                return path, out_path, "ok", notes
+                            _pyt = None
+                        if _pyt is not None:
+                            img = Image.open(str(png_out))
+                            text = _pyt.image_to_string(img)
+                            txt_path = png_out.with_suffix(".txt")
+                            txt_path.parent.mkdir(parents=True, exist_ok=True)
+                            txt_path.write_text(text or "", encoding="utf-8")
+                            # Track PII-like hints if detected via boxes
+                            if pii_ocr:
+                                try:
+                                    arr = ds.pixel_array
+                                    boxes = detect_pii_boxes(arr)
+                                    if boxes:
+                                        study_id = (
+                                            orig_study_uid_by_path.get(path, "")
+                                            or processed_base.name
+                                        )
+                                        study_pii.setdefault(study_id, set()).add(rel)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        if on_log:
+                            on_log("warn", f"PNG OCR failed: {png_out}")
+                return path, png_out, "ok", notes
             except Exception:
                 return path, out_path, "write-failed", "Failed to write output"
 
