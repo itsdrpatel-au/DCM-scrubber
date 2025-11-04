@@ -40,6 +40,8 @@ def run_batch(
     _start_time = time.time()
 
     # Pre-processing cleanup: Remove temporary files starting with underscore from input directories
+    if on_log:
+        on_log("info", "Step 1/4: Scanning for temporary files to clean up...")
     cleanup_count = 0
     try:
         for root_dir in inputs:
@@ -61,8 +63,22 @@ def run_batch(
         if on_log:
             on_log("warn", "Pre-processing cleanup encountered an error")
 
+    # File discovery with progress feedback
+    if on_log:
+        on_log("info", "Step 2/4: Discovering DICOM and PDF files...")
     dicoms = list(iter_dicom_paths(inputs, recurse=recurse))
     pdfs = list(iter_pdf_paths(inputs, recurse=recurse))
+    
+    # Sort files naturally for numerical order processing
+    def natural_sort_key(p: Path) -> tuple:
+        """Sort by parent directory then filename naturally (handles numbers correctly)."""
+        import re
+        def atoi(text: str) -> int | str:
+            return int(text) if text.isdigit() else text.lower()
+        return (str(p.parent), [atoi(c) for c in re.split(r'(\d+)', p.name)])
+    
+    dicoms = sorted(dicoms, key=natural_sort_key)
+    pdfs = sorted(pdfs, key=natural_sort_key)
     discovered = dicoms
     total = len(discovered) + len(pdfs)
     if on_log:
@@ -84,18 +100,70 @@ def run_batch(
     # PNG outputs will be nested under each processed study folder (per-file computed)
 
     # Pre-read original StudyInstanceUIDs for ordering/grouping (best-effort)
+    if on_log:
+        on_log("info", f"Step 3/4: Reading study metadata from {len(discovered)} files (this may take a few minutes)...")
     orig_study_uid_by_path: dict[Path, str] = {}
-    for p in discovered:
+    metadata_progress_interval = max(100, len(discovered) // 20)  # Log every 5% or 100 files, whichever is more
+    for idx, p in enumerate(discovered, 1):
         try:
+            if cancelled_flag and cancelled_flag.is_set():
+                if on_log:
+                    on_log("warn", "Cancelled during metadata reading")
+                return output_dir / "cancelled_report.csv"  # Return placeholder
             ds_tmp = pydicom.dcmread(str(p), force=True, stop_before_pixels=True)
             orig_study_uid_by_path[p] = str(getattr(ds_tmp, "StudyInstanceUID", ""))
         except Exception:
             orig_study_uid_by_path[p] = ""
+        # Progress logging every N files
+        if on_log and idx % metadata_progress_interval == 0:
+            percent = (idx / len(discovered)) * 100
+            on_log("info", f"Reading metadata... {idx}/{len(discovered)} ({percent:.1f}%)")
 
+    # Resume capability: Check for already processed files
+    if on_log:
+        on_log("info", "Checking for already processed files (resume support)...")
+    already_processed: set[Path] = set()
+    
+    def _match_root_and_rel_early(path: Path) -> tuple[Path, Path]:
+        """Match path to input root and get relative path."""
+        best_root: Path | None = None
+        best_rel: Path | None = None
+        best_len = -1
+        for root in inputs:
+            try:
+                r = path.resolve().relative_to(root.resolve())
+            except Exception:
+                continue
+            root_len = len(str(root))
+            if root_len > best_len:
+                best_len = root_len
+                best_root = root
+                best_rel = r
+        if best_root is None or best_rel is None:
+            return path.parent, Path(path.name)
+        return best_root, best_rel
+    
+    def _processed_base_for_early(root: Path) -> Path:
+        return output_dir / f"{root.name}_processed"
+    
+    for p in discovered:
+        root, rel = _match_root_and_rel_early(p)
+        processed_base = _processed_base_for_early(root)
+        expected_output = (processed_base / rel).with_suffix(".png")
+        if expected_output.exists():
+            already_processed.add(p)
+    
+    if already_processed:
+        if on_log:
+            on_log("info", f"Found {len(already_processed)} already processed files - will skip them (resume mode)")
+    
     with ReportWriter(output_dir) as report:
         report_path = report.path
         # Accumulate per-study PII detection info
         study_pii: dict[str, set[Path]] = {}
+        
+        if on_log:
+            on_log("info", f"Step 4/4: Processing {len(discovered) - len(already_processed)} files with {max_workers} workers...")
 
         def update_progress() -> None:
             nonlocal last_time, last_done
@@ -111,8 +179,6 @@ def run_batch(
                 on_progress(done, total, rate, eta_s)
 
         max_workers = workers or os.cpu_count() or 4
-        if on_log:
-            on_log("info", f"Starting processing with {max_workers} workers")
 
         def _match_root_and_rel(path: Path) -> tuple[Path, Path]:
             """Return (matched_root, relative_path) where relative_path is path relative to root.
@@ -146,24 +212,40 @@ def run_batch(
                 root0, rel0 = _match_root_and_rel(p)
                 if rel0.stem == "I000001":
                     skip_first.add(p)
-        # Filter processing list and recompute total
-        proc_dicoms = [p for p in discovered if p not in skip_first]
+        # Filter processing list: exclude skip_first and already_processed files, recompute total
+        proc_dicoms = [p for p in discovered if p not in skip_first and p not in already_processed]
         total = len(proc_dicoms) + len(pdfs)
+        
+        # Log skipped counts
+        if skip_first and on_log:
+            on_log("info", f"Skipping {len(skip_first)} first-of-study images (I000001)")
+        if already_processed and on_log:
+            on_log("info", f"Resuming: Skipping {len(already_processed)} already processed files")
 
         def process_one(path: Path) -> tuple[Path, Path | None, str, str]:
+            """Process a single DICOM file with robust error handling."""
             if cancelled_flag and cancelled_flag.is_set():
                 return path, None, "cancelled", "Cancelled before start"
-            ds, warns = deidentify_and_mask(path, rows_to_zero=rows, uid_cache=uid_cache)
-            notes = "; ".join(warns)
-            if ds is None:
-                return path, None, "unreadable", notes
-            root, rel = _match_root_and_rel(path)
-            processed_base = _processed_base_for(root)
-            # We no longer write DICOMs to output; only PNGs and TXT
-            out_path = (processed_base / rel).with_suffix(".png")
-            if dry_run:
-                # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
-                return path, out_path, "dry-run", notes
+            
+            try:
+                ds, warns = deidentify_and_mask(path, rows_to_zero=rows, uid_cache=uid_cache)
+                notes = "; ".join(warns)
+                if ds is None:
+                    return path, None, "unreadable", notes
+                root, rel = _match_root_and_rel(path)
+                processed_base = _processed_base_for(root)
+                # We no longer write DICOMs to output; only PNGs and TXT
+                out_path = (processed_base / rel).with_suffix(".png")
+                if dry_run:
+                    # Optionally export PNG even in dry-run? We'll skip writing PNGs in dry-run.
+                    return path, out_path, "dry-run", notes
+            except Exception as e:
+                # Catch any errors during de-identification to prevent thread pool failure
+                error_msg = f"De-identification error: {str(e)[:100]}"
+                if on_log:
+                    on_log("error", f"Failed to process {path.name}: {error_msg}")
+                return path, None, "error", error_msg
+            
             try:
                 # Optional OCR-based PII scan and mask
                 if pii_ocr:
@@ -214,15 +296,24 @@ def run_batch(
                         if on_log:
                             on_log("warn", f"PNG OCR failed: {str(e)[:100]}")
                 return path, png_out, "ok", notes
-            except Exception:
-                return path, out_path, "write-failed", "Failed to write output"
+            except Exception as e:
+                # Robust error handling for PNG export/OCR failures
+                error_msg = f"Output write error: {str(e)[:100]}"
+                if on_log:
+                    on_log("error", f"Failed to write output for {path.name}: {error_msg}")
+                return path, out_path, "write-failed", error_msg
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             # Submit only non-skipped DICOMs
             futures = [ex.submit(process_one, p) for p in proc_dicoms]
-            # Optionally record skipped items in report (not counted in progress total)
+            # Record skipped items in report (not counted in progress total)
             for sp in skip_first:
                 report.write_row(sp, None, "skipped-first", "First image of study; not processed")
+            # Record already processed items in report (resume mode)
+            for ap in already_processed:
+                root_ap, rel_ap = _match_root_and_rel(ap)
+                out_ap = (_processed_base_for(root_ap) / rel_ap).with_suffix(".png")
+                report.write_row(ap, out_ap, "skipped-resume", "Already processed; skipped in resume mode")
             for fut in as_completed(futures):
                 if cancelled_flag and cancelled_flag.is_set():
                     if on_log:
@@ -328,6 +419,11 @@ def run_batch(
                 remaining = total - done
                 if on_log and remaining > 0:
                     on_log("warn", f"Cancelled with {remaining} files remaining")
+            else:
+                # Successful completion
+                if on_log:
+                    elapsed = time.time() - _start_time
+                    on_log("info", f"Processing completed: {done} files in {elapsed:.1f} seconds")
 
         # Post-processing cleanup: Remove temporary files starting with underscore from output directory
         if not dry_run:
