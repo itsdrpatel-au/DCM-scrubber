@@ -187,8 +187,10 @@ def run_batch(
                         from PIL import Image
                         try:
                             import pytesseract as _pyt
-                        except Exception:
+                        except Exception as e:
                             _pyt = None
+                            if on_log:
+                                on_log("warn", f"Pytesseract not available: {str(e)[:100]}")
                         if _pyt is not None:
                             img = Image.open(str(png_out))
                             text = _pyt.image_to_string(img)
@@ -208,9 +210,9 @@ def run_batch(
                                         study_pii.setdefault(study_id, set()).add(rel)
                                 except Exception:
                                     pass
-                    except Exception:
+                    except Exception as e:
                         if on_log:
-                            on_log("warn", f"PNG OCR failed: {png_out}")
+                            on_log("warn", f"PNG OCR failed: {str(e)[:100]}")
                 return path, png_out, "ok", notes
             except Exception:
                 return path, out_path, "write-failed", "Failed to write output"
