@@ -146,24 +146,37 @@ def run_batch(
     def _processed_base_for_early(root: Path) -> Path:
         return output_dir / f"{root.name}_processed"
     
-    for p in discovered:
+    resume_check_interval = max(100, len(discovered) // 10)  # Log every 10% or 100 files
+    for idx, p in enumerate(discovered, 1):
+        if cancelled_flag and cancelled_flag.is_set():
+            if on_log:
+                on_log("warn", "Cancelled during resume check")
+            return output_dir / "cancelled_report.csv"
         root, rel = _match_root_and_rel_early(p)
         processed_base = _processed_base_for_early(root)
         expected_output = (processed_base / rel).with_suffix(".png")
         if expected_output.exists():
             already_processed.add(p)
+        # Progress logging
+        if on_log and len(discovered) > 500 and idx % resume_check_interval == 0:
+            percent = (idx / len(discovered)) * 100
+            on_log("info", f"Resume check... {idx}/{len(discovered)} ({percent:.0f}%)")
     
     if already_processed:
         if on_log:
             on_log("info", f"Found {len(already_processed)} already processed files - will skip them (resume mode)")
+    elif on_log:
+        on_log("info", "No already processed files found - processing all files")
+    
+    # Calculate max workers before starting
+    max_workers = workers or os.cpu_count() or 4
+    if on_log:
+        on_log("info", f"Step 4/4: Processing {len(discovered) - len(already_processed)} files with {max_workers} workers...")
     
     with ReportWriter(output_dir) as report:
         report_path = report.path
         # Accumulate per-study PII detection info
         study_pii: dict[str, set[Path]] = {}
-        
-        if on_log:
-            on_log("info", f"Step 4/4: Processing {len(discovered) - len(already_processed)} files with {max_workers} workers...")
 
         def update_progress() -> None:
             nonlocal last_time, last_done
@@ -177,8 +190,6 @@ def run_batch(
                 last_time = now
                 last_done = done
                 on_progress(done, total, rate, eta_s)
-
-        max_workers = workers or os.cpu_count() or 4
 
         def _match_root_and_rel(path: Path) -> tuple[Path, Path]:
             """Return (matched_root, relative_path) where relative_path is path relative to root.
