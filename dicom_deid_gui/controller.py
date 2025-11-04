@@ -39,6 +39,28 @@ def run_batch(
     # Start time used for progress estimates
     _start_time = time.time()
 
+    # Pre-processing cleanup: Remove temporary files starting with underscore from input directories
+    cleanup_count = 0
+    try:
+        for root_dir in inputs:
+            if not root_dir.exists():
+                continue
+            try:
+                for temp_file in root_dir.rglob("_*"):
+                    if temp_file.is_file():
+                        try:
+                            temp_file.unlink()
+                            cleanup_count += 1
+                        except Exception:
+                            pass  # Skip files we can't delete
+            except Exception:
+                pass  # Continue with next directory if this one fails
+        if cleanup_count > 0 and on_log:
+            on_log("info", f"Cleaned up {cleanup_count} temporary files from input directories")
+    except Exception:
+        if on_log:
+            on_log("warn", "Pre-processing cleanup encountered an error")
+
     dicoms = list(iter_dicom_paths(inputs, recurse=recurse))
     pdfs = list(iter_pdf_paths(inputs, recurse=recurse))
     discovered = dicoms
@@ -304,6 +326,23 @@ def run_batch(
                 remaining = total - done
                 if on_log and remaining > 0:
                     on_log("warn", f"Cancelled with {remaining} files remaining")
+
+        # Post-processing cleanup: Remove temporary files starting with underscore from output directory
+        if not dry_run:
+            cleanup_count = 0
+            try:
+                for temp_file in output_dir.rglob("_*"):
+                    if temp_file.is_file():
+                        try:
+                            temp_file.unlink()
+                            cleanup_count += 1
+                        except Exception:
+                            pass  # Skip files we can't delete
+                if cleanup_count > 0 and on_log:
+                    on_log("info", f"Cleaned up {cleanup_count} temporary files from output directory")
+            except Exception:
+                if on_log:
+                    on_log("warn", "Post-processing cleanup encountered an error")
 
     assert report_path is not None
     return report_path
