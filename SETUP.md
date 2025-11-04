@@ -137,9 +137,13 @@ Or download manually from [Apple Developer Downloads](https://developer.apple.co
 - **Pixel Masking**: Masks top rows of images to remove burned-in annotations
 - **OCR Text Extraction**: Extracts text from images for review (requires Tesseract)
 - **PDF Processing**: Handles study PDFs alongside DICOM files
-- **Batch Processing**: Multi-threaded processing for large datasets
+- **Batch Processing**: Multi-threaded processing optimized for large datasets (500+ studies, 30,000+ files)
+- **Resume Capability**: Automatically resumes interrupted processing - just restart and it continues where it left off
+- **Numerical Ordering**: Processes files in natural order (I000001, I000002, etc.)
+- **Progress Feedback**: Clear 4-step progress with updates during metadata reading for large batches
 - **First Image Removal**: Automatically removes the first image (I000001.dcm) from each study
 - **Temporary File Cleanup**: Removes underscore-prefixed temporary files before and after processing
+- **Robust Error Handling**: Individual file errors don't stop the batch - processing continues
 
 ## Default Settings
 
@@ -170,4 +174,38 @@ Dry run (preview without writing):
 ```bash
 dicom-deid -i /path/to/input -o /path/to/output --dry-run
 ```
+
+## Batch Processing (Large Datasets)
+
+The system is optimized for processing large batches (500+ studies with thousands of files):
+
+### Progress Phases
+
+When you start processing, you'll see 4 distinct phases:
+
+1. **Step 1/4: Scanning for temporary files** - Cleans up any leftover temp files
+2. **Step 2/4: Discovering files** - Finds all DICOM and PDF files
+3. **Step 3/4: Reading metadata** - Reads StudyInstanceUID from all files (shows progress every 5%)
+4. **Step 4/4: Processing files** - De-identifies and exports files (shows files/sec and ETA)
+
+### Resume Capability
+
+If processing is interrupted (crash, power loss, cancellation), simply restart with the same input and output directories:
+
+- The system automatically detects already processed files (checks for existing .png outputs)
+- Skips those files and only processes remaining files
+- Logs how many files were skipped: "Resuming: Skipping X already processed files"
+- The CSV report includes all files (both newly processed and skipped)
+
+**Example**: Processing 30,000 files interrupted at file 10,000:
+- Restart the application
+- Select the same input and output directories
+- Processing resumes from file 10,001 automatically
+
+### Performance Tips
+
+- **Workers**: Default is CPU core count - usually optimal
+- **For 30,000 files**: Metadata reading (Step 3) may take 5-10 minutes
+- **Progress updates**: Watch the log panel for progress during metadata reading
+- **Cancellation**: You can cancel anytime - use resume to continue later
 

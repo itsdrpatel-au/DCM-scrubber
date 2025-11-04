@@ -65,6 +65,14 @@ pytest -q
 - **OCR PII scan (no LLM)**: Optional OCR‑based scan that masks detected PII text regions (phones, emails, SSN‑like, MRN hints, dates, name hints) before writing.
 - **Skip first image per study**: Automatically deletes the first image (I000001.dcm) from each study after processing (enabled by default).
 - **Temporary file cleanup**: Automatically removes underscore-prefixed temporary files from input directories before processing and output directory after processing.
+- **Numerical ordering**: Processes files in natural numerical order (I000001, I000002, etc.) for predictable output.
+- **Resume capability**: Automatically detects and skips already processed files - if processing fails, simply restart and it will continue where it left off.
+- **Batch processing optimized**: Designed for 500+ studies (30,000+ files) with progress feedback during all phases:
+  - Step 1: Temporary file cleanup
+  - Step 2: File discovery
+  - Step 3: Metadata reading (with progress updates)
+  - Step 4: De-identification and export
+- **Robust error handling**: Individual file failures don't stop the batch - errors are logged and processing continues.
 
 ### GUI Overview
 
