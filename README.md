@@ -2,7 +2,29 @@
 
 Cross‑platform HIPAA‑safe DICOM de‑identification utility with a PySide6 (Qt) GUI and a mirrored CLI. Performs aggressive metadata scrubbing, pixel masking, PNG previews, and per‑study PDF redaction/extraction, with multithreaded performance and robust reporting.
 
-### Quickstart
+### Quick Setup
+
+**For detailed installation instructions** (including system dependencies like Tesseract OCR), see [SETUP.md](SETUP.md).
+
+**TL;DR:**
+```bash
+# macOS
+brew install tesseract
+pip3 install -e .
+python3 -m dicom_deid_gui.app
+
+# Windows
+# Install Python and Tesseract (see SETUP.md)
+pip install -e .
+python -m dicom_deid_gui.app
+
+# Linux
+sudo apt install python3 python3-pip tesseract-ocr
+pip3 install -e .
+python3 -m dicom_deid_gui.app
+```
+
+### Developer Quickstart
 
 ```bash
 # Create and activate a virtual environment
@@ -41,7 +63,8 @@ pytest -q
 - **Robust logging**: Rotating file logs plus GUI log pane; logs paths/status only (no PHI).
 - **Thread‑safe GUI**: Progress/log updates via Qt signals; cancel button halts promptly.
 - **OCR PII scan (no LLM)**: Optional OCR‑based scan that masks detected PII text regions (phones, emails, SSN‑like, MRN hints, dates, name hints) before writing.
-- **Skip first image per study**: Optional delete of the very first output image per study (post‑processing), as requested for workflow policies.
+- **Skip first image per study**: Automatically deletes the first image (I000001.dcm) from each study after processing (enabled by default).
+- **Temporary file cleanup**: Automatically removes underscore-prefixed temporary files from input directories before processing and output directory after processing.
 
 ### GUI Overview
 

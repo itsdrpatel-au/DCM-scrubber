@@ -60,7 +60,7 @@ class OptionsPanel(QtWidgets.QWidget):
         self.pii_ocr.setChecked(True)
 
         self.skip_first = QtWidgets.QCheckBox()
-        self.skip_first.setChecked(False)
+        self.skip_first.setChecked(True)
 
         self.output = QtWidgets.QLineEdit()
         self.output.setReadOnly(True)

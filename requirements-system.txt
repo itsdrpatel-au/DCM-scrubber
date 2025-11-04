@@ -1,0 +1,22 @@
+# System-level dependencies required before running pip install
+
+macOS:
+  - Tesseract OCR: brew install tesseract
+  - Python 3.10+: brew install python@3.11
+  - Xcode Command Line Tools (may need update): xcode-select --install
+
+Windows:
+  - Python 3.10+: https://www.python.org/downloads/
+    (Check "Add Python to PATH" during installation)
+  - Tesseract OCR: https://github.com/UB-Mannheim/tesseract/wiki
+    Install location: C:\Program Files\Tesseract-OCR
+    Add to PATH: C:\Program Files\Tesseract-OCR
+
+Linux (Ubuntu/Debian):
+  - sudo apt update
+  - sudo apt install python3 python3-pip tesseract-ocr
+
+After system dependencies are installed, run:
+  macOS/Linux: pip3 install -e .
+  Windows: pip install -e .
+
